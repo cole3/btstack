@@ -982,6 +982,7 @@ typedef uint8_t sm_key_t[16];
 #define HCI_EVENT_HID_META                                 0xEF
 #define HCI_EVENT_A2DP_META                                0xF0
 #define HCI_EVENT_HIDS_META                                0xF1
+#define HCI_EVENT_MESH_META                                0xF2
 
 // Potential other meta groups
 // #define HCI_EVENT_BNEP_META                                0xxx
@@ -1825,7 +1826,7 @@ typedef uint8_t sm_key_t[16];
  * @format 12
  * @param subevent_code
  * @param hid_cid
-*/
+ */
 #define HID_SUBEVENT_CAN_SEND_NOW                                          0x03
 
 // HIDS Meta Event Group
@@ -1868,5 +1869,11 @@ typedef uint8_t sm_key_t[16];
  * @param enable
 */
 #define HIDS_SUBEVENT_INPUT_REPORT_ENABLE                                   0x05
+
+/**
+ * @format 1
+ * @param subevent_code
+ */
+#define MESH_SUBEVENT_CAN_SEND_NOW                                          0x01
 
 #endif
