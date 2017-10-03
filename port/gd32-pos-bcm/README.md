@@ -9,9 +9,8 @@ Requirements:
 
 Configuration:
 - Sys tick 250 ms
-- LED on PA5, on when MCU in Run mode and off while in Sleep mode
-- Debug UART: USART2 - 9600/8/N/1, TX on PA2
-- Bluetooth: USART3 with hardware flowcontrol RTS. IRQ on CTS Rising. TX PB10, RX PB11, CTS PB13 (in), RTS PB14 (out), N_SHUTDOWN PB15
+- RED LED on PB4, BLUE LED on PC7
+- Bluetooth UART: USART2 - 115200/8/N/1, TX on PA2
 
 Setup with AP6210:
 - Connect GD32 POS Board to AP6210 (see BoosterPack pinout)
