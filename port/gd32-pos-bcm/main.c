@@ -44,6 +44,7 @@
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/usart.h>
 #include <libopencm3/stm32/exti.h>
+#include <libopencm3/stm32/timer.h>
 #include <libopencmsis/core_cm3.h>
 
 #include <stdio.h>
@@ -73,13 +74,24 @@
 #endif
 
 // Configuration
-// LED2 on PA5
-// Debug: USART1, TX on PA2
-// Bluetooth: USART3. TX PB10, RX PB11, CTS PB13 (in), RTS PB14 (out), N_SHUTDOWN PB15
+// LED on PC7
+// Debug: USART1, TX on PA9
+// Bluetooth: USART2. TX PA2, RX PA3, CTS PA0 (in), RTS PA1 (out), N_RST PC2
 #define BT_LED_IO GPIO7
 #define BT_LED_PORT GPIOC
 #define USART_CONSOLE USART1
-#define GPIO_BT_N_SHUTDOWN GPIO15
+#define BT_N_RST_PORT GPIOC
+#define BT_N_RST_IO GPIO2
+#define BT_N_WAKE_PORT GPIOA
+#define BT_N_WAKE_IO GPIO5
+#define BT_HOST_WAKE_PORT GPIOA
+#define BT_HOST_WAKE_IO GPIO4
+
+
+extern uint32_t rcc_apb1_frequency;
+extern uint32_t rcc_apb2_frequency;
+extern uint32_t rcc_ahb_frequency;
+
 
 // btstack code starts there
 void btstack_main(void);
@@ -98,14 +110,14 @@ static void dummy_handler(void){};
 static btstack_packet_callback_registration_t hci_event_callback_registration;
 
 void hal_tick_init(void){
-	systick_set_reload(800000);	// 1/4 of clock -> 250 ms tick
+	systick_set_reload(7200000);	// 100 ms tick
 	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB);
 	systick_counter_enable();
 	systick_interrupt_enable();
 }
 
-int  hal_tick_get_tick_period_in_ms(void){
-    return 100;
+int hal_tick_get_tick_period_in_ms(void){
+    return 100; // 100 ms tick
 }
 
 void hal_tick_set_handler(void (*handler)(void)){
@@ -118,6 +130,11 @@ void hal_tick_set_handler(void (*handler)(void)){
 
 void sys_tick_handler(void){
 	(*tick_handler)();
+	static int n;
+	n++;
+	if (n % 10 == 0) {
+		printf("tick n %d\n", n++);
+	}
 }
 
 static void msleep(uint32_t delay) {
@@ -169,11 +186,11 @@ static void (*tx_done_handler)(void) = dummy_handler;
 static void (*cts_irq_handler)(void) = dummy_handler;
 
 static void hal_uart_manual_rts_set(void){
-	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO_USART3_RTS);
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO_USART2_RTS);
 }
 
 static void hal_uart_manual_rts_clear(void){
-	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART3_RTS);
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART2_RTS);
 }
 
 void hal_uart_dma_set_sleep(uint8_t sleep){
@@ -185,24 +202,24 @@ void hal_uart_dma_set_sleep(uint8_t sleep){
 	hal_uart_needed_during_sleep = !sleep;
 }
 
-// DMA1_CHANNEL2 UART3_TX
-void dma1_channel2_isr(void) {
-	if ((DMA1_ISR & DMA_ISR_TCIF2) != 0) {
-		DMA1_IFCR |= DMA_IFCR_CTCIF2;
-		dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL2);
-		usart_disable_tx_dma(USART3);
-		dma_disable_channel(DMA1, DMA_CHANNEL2);
+// DMA1_CHANNEL6 UART2_TX
+void dma1_channel6_isr(void) {
+	if ((DMA1_ISR & DMA_ISR_TCIF6) != 0) {
+		DMA1_IFCR |= DMA_IFCR_CTCIF6;
+		dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL6);
+		usart_disable_tx_dma(USART2);
+		dma_disable_channel(DMA1, DMA_CHANNEL6);
 		(*tx_done_handler)();
 	}
 }
 
-// DMA1_CHANNEL2 UART3_RX
-void dma1_channel3_isr(void){
-	if ((DMA1_ISR & DMA_ISR_TCIF3) != 0) {
-		DMA1_IFCR |= DMA_IFCR_CTCIF3;
-		dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL3);
-		usart_disable_rx_dma(USART3);
-		dma_disable_channel(DMA1, DMA_CHANNEL3);
+// DMA1_CHANNEL7 UART2_RX
+void dma1_channel7_isr(void){
+	if ((DMA1_ISR & DMA_ISR_TCIF7) != 0) {
+		DMA1_IFCR |= DMA_IFCR_CTCIF7;
+		dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL7);
+		usart_disable_rx_dma(USART2);
+		dma_disable_channel(DMA1, DMA_CHANNEL7);
 
 		// hal_uart_manual_rts_set();
 		(*rx_done_handler)();
@@ -210,8 +227,8 @@ void dma1_channel3_isr(void){
 }
 
 // CTS RISING ISR
-void exti15_10_isr(void){
-	exti_reset_request(EXTI13);
+void exti0_isr(void){
+	exti_reset_request(EXTI0);
 	(*cts_irq_handler)();
 }
 
@@ -228,22 +245,22 @@ void hal_uart_dma_set_block_sent( void (*the_block_handler)(void)){
 
 void hal_uart_dma_set_csr_irq_handler( void (*the_irq_handler)(void)){
 	if (the_irq_handler){
-		/* Configure the EXTI13 interrupt (USART3_CTS is on PB13) */
-		nvic_enable_irq(NVIC_EXTI15_10_IRQ);
-		exti_select_source(EXTI13, GPIOB);
-		exti_set_trigger(EXTI13, EXTI_TRIGGER_RISING);
-		exti_enable_request(EXTI13);
+		/* Configure the EXTI0 interrupt (USART2_CTS is on PB13) */
+		nvic_enable_irq(NVIC_EXTI0_IRQ);
+		exti_select_source(EXTI0, GPIOB);
+		exti_set_trigger(EXTI0, EXTI_TRIGGER_RISING);
+		exti_enable_request(EXTI0);
 	} else {
-		exti_disable_request(EXTI13);
-		nvic_disable_irq(NVIC_EXTI15_10_IRQ);
+		exti_disable_request(EXTI0);
+		nvic_disable_irq(NVIC_EXTI0_IRQ);
 	}
     cts_irq_handler = the_irq_handler;
 }
 
 int  hal_uart_dma_set_baud(uint32_t baud){
-	usart_disable(USART3);
-	usart_set_baudrate(USART3, baud);
-	usart_enable(USART3);
+	usart_disable(USART2);
+	usart_set_baudrate(USART2, baud);
+	usart_enable(USART2);
 	return 0;
 }
 
@@ -251,23 +268,23 @@ void hal_uart_dma_send_block(const uint8_t *data, uint16_t size){
 
 	// printf("hal_uart_dma_send_block size %u\n", size);
 	/*
-	 * USART3_TX Using DMA_CHANNEL2 
+	 * USART2_TX Using DMA_CHANNEL6
 	 */
 
 	/* Reset DMA channel*/
-	dma_channel_reset(DMA1, DMA_CHANNEL2);
+	dma_channel_reset(DMA1, DMA_CHANNEL6);
 
-	dma_set_peripheral_address(DMA1, DMA_CHANNEL2, (uint32_t)&USART3_DR);
-	dma_set_memory_address(DMA1, DMA_CHANNEL2, (uint32_t)data);
-	dma_set_number_of_data(DMA1, DMA_CHANNEL2, size);
-	dma_set_read_from_memory(DMA1, DMA_CHANNEL2);
-	dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL2);
-	dma_set_peripheral_size(DMA1, DMA_CHANNEL2, DMA_CCR_PSIZE_8BIT);
-	dma_set_memory_size(DMA1, DMA_CHANNEL2, DMA_CCR_MSIZE_8BIT);
-	dma_set_priority(DMA1, DMA_CHANNEL2, DMA_CCR_PL_VERY_HIGH);
-	dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL2);
-	dma_enable_channel(DMA1, DMA_CHANNEL2);
-    usart_enable_tx_dma(USART3);
+	dma_set_peripheral_address(DMA1, DMA_CHANNEL6, (uint32_t)&USART2_DR);
+	dma_set_memory_address(DMA1, DMA_CHANNEL6, (uint32_t)data);
+	dma_set_number_of_data(DMA1, DMA_CHANNEL6, size);
+	dma_set_read_from_memory(DMA1, DMA_CHANNEL6);
+	dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL6);
+	dma_set_peripheral_size(DMA1, DMA_CHANNEL6, DMA_CCR_PSIZE_8BIT);
+	dma_set_memory_size(DMA1, DMA_CHANNEL6, DMA_CCR_MSIZE_8BIT);
+	dma_set_priority(DMA1, DMA_CHANNEL6, DMA_CCR_PL_VERY_HIGH);
+	dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL6);
+	dma_enable_channel(DMA1, DMA_CHANNEL6);
+    usart_enable_tx_dma(USART2);
 }
 
 void hal_uart_dma_receive_block(uint8_t *data, uint16_t size){
@@ -275,25 +292,25 @@ void hal_uart_dma_receive_block(uint8_t *data, uint16_t size){
 	// hal_uart_manual_rts_clear();
 
 	/*
-	 * USART3_RX is on DMA_CHANNEL3
+	 * USART2_RX is on DMA_CHANNEL7
 	 */
 
 	// printf("hal_uart_dma_receive_block req size %u\n", size);
 
 	/* Reset DMA channel*/
-	dma_channel_reset(DMA1, DMA_CHANNEL3);
+	dma_channel_reset(DMA1, DMA_CHANNEL7);
 
-	dma_set_peripheral_address(DMA1, DMA_CHANNEL3, (uint32_t)&USART3_DR);
-	dma_set_memory_address(DMA1, DMA_CHANNEL3, (uint32_t)data);
-	dma_set_number_of_data(DMA1, DMA_CHANNEL3, size);
-	dma_set_read_from_peripheral(DMA1, DMA_CHANNEL3);
-	dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL3);
-	dma_set_peripheral_size(DMA1, DMA_CHANNEL3, DMA_CCR_PSIZE_8BIT);
-	dma_set_memory_size(DMA1, DMA_CHANNEL3, DMA_CCR_MSIZE_8BIT);
-	dma_set_priority(DMA1, DMA_CHANNEL3, DMA_CCR_PL_HIGH);
-	dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL3);
-	dma_enable_channel(DMA1, DMA_CHANNEL3);
-    usart_enable_rx_dma(USART3);
+	dma_set_peripheral_address(DMA1, DMA_CHANNEL7, (uint32_t)&USART2_DR);
+	dma_set_memory_address(DMA1, DMA_CHANNEL7, (uint32_t)data);
+	dma_set_number_of_data(DMA1, DMA_CHANNEL7, size);
+	dma_set_read_from_peripheral(DMA1, DMA_CHANNEL7);
+	dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL7);
+	dma_set_peripheral_size(DMA1, DMA_CHANNEL7, DMA_CCR_PSIZE_8BIT);
+	dma_set_memory_size(DMA1, DMA_CHANNEL7, DMA_CCR_MSIZE_8BIT);
+	dma_set_priority(DMA1, DMA_CHANNEL7, DMA_CCR_PL_HIGH);
+	dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL7);
+	dma_enable_channel(DMA1, DMA_CHANNEL7);
+    usart_enable_rx_dma(USART2);
 }
 
 // end of hal_uart
@@ -336,6 +353,7 @@ static void clock_setup(void){
 	rcc_periph_clock_enable(RCC_USART2);
 	rcc_periph_clock_enable(RCC_DMA1);
 	rcc_periph_clock_enable(RCC_AFIO); // needed by EXTI interrupts
+	rcc_periph_clock_enable(RCC_TIM3);
 }
 
 static void gpio_setup(void){
@@ -348,6 +366,7 @@ static void gpio_setup(void){
 static void debug_usart_setup(void){
 	/* Setup GPIO pin GPIO_USART1_TX/GPIO2 on GPIO port A for transmit. */
 	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART1_TX);
+	gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO_USART1_RX);
 
 	/* Setup UART parameters. */
 	usart_set_baudrate(USART1, 115200);
@@ -364,49 +383,86 @@ static void debug_usart_setup(void){
 static void bluetooth_setup(void){
 	printf("\nBluetooth starting...\n");
 
-	// n_shutdown as output
-	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL,GPIO_BT_N_SHUTDOWN);
+	// reset as output
+	gpio_set_mode(BT_N_RST_PORT, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, BT_N_RST_IO);
+	// wakeup as output
+	gpio_set_mode(BT_N_WAKE_PORT, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, BT_N_WAKE_IO);
+	// host wakeup as input
+	gpio_set_mode(BT_HOST_WAKE_PORT, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, BT_HOST_WAKE_IO);
 
 	// tx output
-	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART3_TX);
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART2_TX);
 	// rts output (default to 1)
-	gpio_set(GPIOB, GPIO_USART3_RTS);
-	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART3_RTS);
+	gpio_set(GPIOA, GPIO_USART2_RTS);
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART2_RTS);
 	// rx input
-	gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO_USART3_RX);
+	gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO_USART2_RX);
 	// cts as input
-	gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO_USART3_CTS);
-
+	gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO_USART2_CTS);
 
 	/* Setup UART parameters. */
-	usart_set_baudrate(USART3, 115200);
-	usart_set_databits(USART3, 8);
-	usart_set_stopbits(USART3, USART_STOPBITS_1);
-	usart_set_mode(USART3, USART_MODE_TX_RX);
-	usart_set_parity(USART3, USART_PARITY_NONE);
-	usart_set_flow_control(USART3, USART_FLOWCONTROL_RTS);
+	usart_set_baudrate(USART2, 115200);
+	usart_set_databits(USART2, 8);
+	usart_set_stopbits(USART2, USART_STOPBITS_1);
+	usart_set_mode(USART2, USART_MODE_TX_RX);
+	usart_set_parity(USART2, USART_PARITY_NONE);
+	usart_set_flow_control(USART2, USART_FLOWCONTROL_RTS);
 
 	/* Finally enable the USART. */
-	usart_enable(USART3);
+	usart_enable(USART2);
 
 	// TX
-	nvic_set_priority(NVIC_DMA1_CHANNEL2_IRQ, 0);
-	nvic_enable_irq(NVIC_DMA1_CHANNEL2_IRQ);
+	nvic_set_priority(NVIC_DMA1_CHANNEL6_IRQ, 0);
+	nvic_enable_irq(NVIC_DMA1_CHANNEL6_IRQ);
 
 	// RX
-	nvic_set_priority(NVIC_DMA1_CHANNEL3_IRQ, 0);
-	nvic_enable_irq(NVIC_DMA1_CHANNEL3_IRQ);
+	nvic_set_priority(NVIC_DMA1_CHANNEL7_IRQ, 0);
+	nvic_enable_irq(NVIC_DMA1_CHANNEL7_IRQ);
+}
+
+static void bluetooth_clk_init(void)
+{
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO6);
+
+	timer_set_mode(TIM3, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+
+	timer_set_prescaler(TIM2, 54);
+
+	timer_disable_preload(TIM2);
+
+	timer_continuous_mode(TIM2);
+
+	timer_set_period(TIM2, 39);
+
+	timer_set_oc_value(TIM2, TIM_OC1, 19);
+
+	timer_set_oc_mode(TIM2, TIM_OC1, TIM_OCM_PWM1);
+
+	timer_set_oc_polarity_high(TIM2, TIM_OC1);
+
+	timer_set_oc_idle_state_set(TIM2, TIM_OC1);
+	
+	timer_enable_oc_output(TIM2, TIM_OC1);
+
+	timer_enable_counter(TIM2);
 }
 
 // reset Bluetooth using n_shutdown
 static void bluetooth_power_cycle(void){
 	printf("Bluetooth power cycle\n");
-	gpio_clear(BT_LED_PORT, BT_LED_IO);
-	gpio_clear(GPIOB, GPIO_BT_N_SHUTDOWN);
-	msleep(250);
-	gpio_set(BT_LED_PORT, BT_LED_IO);
-	gpio_set(GPIOB, GPIO_BT_N_SHUTDOWN);
+
+	bluetooth_clk_init();
+
 	msleep(500);
+	printf("Bluetooth power cycle 1\n");
+	gpio_clear(BT_N_RST_PORT, BT_N_RST_IO);
+	gpio_clear(BT_N_WAKE_PORT, BT_N_WAKE_IO);
+	msleep(1000);
+	gpio_set(BT_N_RST_PORT, BT_N_RST_IO);
+	msleep(500);
+
+	printf("Bluetooth power cycle end\n");
+	hal_led_on();
 }
 
 
@@ -415,7 +471,7 @@ static void bluetooth_power_cycle(void){
 static const hci_transport_config_uart_t config = {
 	HCI_TRANSPORT_CONFIG_UART,
     115200,
-    460800,
+    115200,
     1,
     NULL
 };
@@ -488,10 +544,6 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
     }
 }
 
-extern uint32_t rcc_apb1_frequency;
-extern uint32_t rcc_apb2_frequency;
-extern uint32_t rcc_ahb_frequency;
-
 int main(void)
 {
 	clock_setup();
@@ -503,7 +555,6 @@ int main(void)
 			(unsigned int)rcc_ahb_frequency,
 			(unsigned int)rcc_apb1_frequency,
 			(unsigned int)rcc_apb2_frequency);
-	hal_led_on();
 
 	bluetooth_setup();
 
