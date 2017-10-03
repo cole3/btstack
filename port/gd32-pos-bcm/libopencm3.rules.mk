@@ -123,16 +123,16 @@ LDLIBS		+= -Wl,--start-group -lc -lgcc -lnosys -Wl,--end-group
 .SECONDEXPANSION:
 .SECONDARY:
 
-# all: elf
+all: elf
 # 
-# elf: $(BINARY).elf
-# bin: $(BINARY).bin
-# hex: $(BINARY).hex
-# srec: $(BINARY).srec
-# list: $(BINARY).list
+elf: $(BINARY).elf
+bin: $(BINARY).bin
+hex: $(BINARY).hex
+srec: $(BINARY).srec
+list: $(BINARY).list
 
-# images: $(BINARY).images
-# flash: $(BINARY).flash
+images: $(BINARY).images
+flash: $(BINARY).flash
 
 %.images: %.bin %.hex %.srec %.list %.map
 	@#printf "*** $* images generated ***\n"

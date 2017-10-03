@@ -74,14 +74,12 @@
 
 // Configuration
 // LED2 on PA5
-// Debug: USART2, TX on PA2
+// Debug: USART1, TX on PA2
 // Bluetooth: USART3. TX PB10, RX PB11, CTS PB13 (in), RTS PB14 (out), N_SHUTDOWN PB15
-#define GPIO_LED2 GPIO5
-#define USART_CONSOLE USART2
+#define BT_LED_IO GPIO7
+#define BT_LED_PORT GPIOC
+#define USART_CONSOLE USART1
 #define GPIO_BT_N_SHUTDOWN GPIO15
-
-#define GPIO_DEBUG_0 GPIO1
-#define GPIO_DEBUG_1 GPIO2
 
 // btstack code starts there
 void btstack_main(void);
@@ -133,13 +131,13 @@ void hal_led_off(void);
 void hal_led_on(void);
 
 void hal_led_off(void){
-	gpio_clear(GPIOA, GPIO_LED2);
+	gpio_set(BT_LED_PORT, BT_LED_IO);
 }
 void hal_led_on(void){
-	gpio_set(GPIOA, GPIO_LED2);
+	gpio_clear(BT_LED_PORT, BT_LED_IO);
 }
 void hal_led_toggle(void){
-	gpio_toggle(GPIOA, GPIO_LED2);
+	gpio_toggle(BT_LED_PORT, BT_LED_IO);
 }
 
 // hal_cpu.h implementation
@@ -206,7 +204,6 @@ void dma1_channel3_isr(void){
 		usart_disable_rx_dma(USART3);
 		dma_disable_channel(DMA1, DMA_CHANNEL3);
 
-		gpio_set(GPIOB, GPIO_DEBUG_1);
 		// hal_uart_manual_rts_set();
 		(*rx_done_handler)();
 	}
@@ -276,7 +273,6 @@ void hal_uart_dma_send_block(const uint8_t *data, uint16_t size){
 void hal_uart_dma_receive_block(uint8_t *data, uint16_t size){
 
 	// hal_uart_manual_rts_clear();
-	gpio_clear(GPIOB, GPIO_DEBUG_1);
 
 	/*
 	 * USART3_RX is on DMA_CHANNEL3
@@ -328,38 +324,41 @@ int _write(int file, char *ptr, int len){
 }
 
 static void clock_setup(void){
+	/* set rcc clk to 72 MHz */
+	rcc_clock_setup_in_hse_12mhz_out_72mhz();
+
 	/* Enable clocks for GPIO port A (for GPIO_USART1_TX) and USART1 + USART2. */
 	/* needs to be done before initializing other peripherals */
 	rcc_periph_clock_enable(RCC_GPIOA);
 	rcc_periph_clock_enable(RCC_GPIOB);
+	rcc_periph_clock_enable(RCC_GPIOC);
+	rcc_periph_clock_enable(RCC_USART1);
 	rcc_periph_clock_enable(RCC_USART2);
-	rcc_periph_clock_enable(RCC_USART3);
 	rcc_periph_clock_enable(RCC_DMA1);
 	rcc_periph_clock_enable(RCC_AFIO); // needed by EXTI interrupts
 }
 
 static void gpio_setup(void){
-	/* Set GPIO5 (in GPIO port A) to 'output push-pull'. [LED] */
-	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO_LED2);
+	/* Set output push-pull [LED] */
+	gpio_set_mode(BT_LED_PORT, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, BT_LED_IO);
 
-	// PB1 and PB2 as debug output
-	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO_DEBUG_0 | GPIO_DEBUG_1);
+    hal_led_off();
 }
 
 static void debug_usart_setup(void){
-	/* Setup GPIO pin GPIO_USART2_TX/GPIO2 on GPIO port A for transmit. */
-	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART2_TX);
+	/* Setup GPIO pin GPIO_USART1_TX/GPIO2 on GPIO port A for transmit. */
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART1_TX);
 
 	/* Setup UART parameters. */
-	usart_set_baudrate(USART2, 9600);
-	usart_set_databits(USART2, 8);
-	usart_set_stopbits(USART2, USART_STOPBITS_1);
-	usart_set_mode(USART2, USART_MODE_TX);
-	usart_set_parity(USART2, USART_PARITY_NONE);
-	usart_set_flow_control(USART2, USART_FLOWCONTROL_NONE);
+	usart_set_baudrate(USART1, 115200);
+	usart_set_databits(USART1, 8);
+	usart_set_stopbits(USART1, USART_STOPBITS_1);
+	usart_set_mode(USART1, USART_MODE_TX);
+	usart_set_parity(USART1, USART_PARITY_NONE);
+	usart_set_flow_control(USART1, USART_FLOWCONTROL_NONE);
 
 	/* Finally enable the USART. */
-	usart_enable(USART2);
+	usart_enable(USART1);
 }
 
 static void bluetooth_setup(void){
@@ -402,10 +401,10 @@ static void bluetooth_setup(void){
 // reset Bluetooth using n_shutdown
 static void bluetooth_power_cycle(void){
 	printf("Bluetooth power cycle\n");
-	gpio_clear(GPIOA, GPIO_LED2);
+	gpio_clear(BT_LED_PORT, BT_LED_IO);
 	gpio_clear(GPIOB, GPIO_BT_N_SHUTDOWN);
 	msleep(250);
-	gpio_set(GPIOA, GPIO_LED2);
+	gpio_set(BT_LED_PORT, BT_LED_IO);
 	gpio_set(GPIOB, GPIO_BT_N_SHUTDOWN);
 	msleep(500);
 }
@@ -489,12 +488,23 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
     }
 }
 
+extern uint32_t rcc_apb1_frequency;
+extern uint32_t rcc_apb2_frequency;
+extern uint32_t rcc_ahb_frequency;
+
 int main(void)
 {
 	clock_setup();
 	gpio_setup();
 	hal_tick_init();
 	debug_usart_setup();
+
+	printf("rcc ahb %u, apb1 %u, apb2 %u\n", 
+			(unsigned int)rcc_ahb_frequency,
+			(unsigned int)rcc_apb1_frequency,
+			(unsigned int)rcc_apb2_frequency);
+	hal_led_on();
+
 	bluetooth_setup();
 
 	// start with BTstack init - especially configure HCI Transport
