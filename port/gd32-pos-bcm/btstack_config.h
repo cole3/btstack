@@ -13,8 +13,8 @@
 #define ENABLE_LE_PERIPHERAL
 #define ENABLE_LE_CENTRAL
 #define ENABLE_CLASSIC
-// #define ENABLE_LOG_INFO 
-// #define ENABLE_LOG_ERROR
+#define ENABLE_LOG_INFO 
+#define ENABLE_LOG_ERROR
 // #define ENABLE_EHCILL
 
 // BTstack configuration. buffers, sizes, ...

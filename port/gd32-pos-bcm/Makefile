@@ -3,7 +3,7 @@
 #
 
 # BINARY=led_counter
-BINARY=spp_and_le_counter
+BINARY=spp_counter
 OPENCM3_DIR = libopencm3
 LDSCRIPT = gd32-pos-bcm.ld
 BTCHIP=bcm
@@ -12,7 +12,6 @@ BTCHIP=bcm
 BTSTACK_ROOT = ../..
 VPATH  = $(BTSTACK_ROOT)/example
 VPATH += $(BTSTACK_ROOT)/src
-VPATH += $(BTSTACK_ROOT)/src/ble
 VPATH += $(BTSTACK_ROOT)/src/classic
 VPATH += $(BTSTACK_ROOT)/platform/embedded
 VPATH += $(BTSTACK_ROOT)/chipset/$(BTCHIP)
@@ -29,6 +28,7 @@ CORE = \
 COMMON = \
 	ad_parser.c 			  \
 	btstack_chipset_bcm.c    \
+	btstack_chipset_bcm_download_firmware.c \
 	btstack_link_key_db_memory.c \
 	rfcomm.c			      \
 	sdp_client_rfcomm.c 		  \
@@ -45,19 +45,11 @@ COMMON = \
     sdp_util.c                \
     spp_server.c			  \
 
-BLE = \
-	att_db.c 				  \
-	att_dispatch.c            \
-	att_server.c     		  \
-	le_device_db_memory.c     \
-	sm.c                      \
-#	gatt_client.c             \
 
 CORE_OBJ   = $(CORE:.c=.o)
 COMMON_OBJ = $(COMMON:.c=.o)
-BLE_OBJ    = $(BLE:.c=.o)
 
-OBJS += $(CORE_OBJ) $(COMMON_OBJ) $(BLE_OBJ)
+OBJS += $(CORE_OBJ) $(COMMON_OBJ) 
 
 CFLAGS = -I. \
 		 -I$(BTSTACK_ROOT)/platform/embedded \
@@ -68,7 +60,7 @@ ifeq ($(BTCHIP), bcm)
 	CFLAGS += -DBCM_BT_CHIP
 endif
 
-examples: bcm20710a1.hcd libopencm3/lib/libopencm3_stm32f1.a spp_and_le_counter.h spp_and_le_counter.elf 
+examples: bcm20710a1.hcd libopencm3/lib/libopencm3_stm32f1.a spp_counter.elf 
 
 include libopencm3.stm32f1.mk
 
@@ -99,7 +91,4 @@ libopencm3/lib/libopencm3_stm32f1.a:
 	git clone https://github.com/libopencm3/libopencm3.git
 	make -C libopencm3
 
-# compile GATT database
-spp_and_le_counter.h: spp_and_le_counter.gatt
-	python ${BTSTACK_ROOT}/tool/compile_gatt.py $< $@ 
 

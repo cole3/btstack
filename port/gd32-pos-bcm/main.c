@@ -55,9 +55,11 @@
 #include "btstack_run_loop.h"
 #include "btstack_run_loop_embedded.h"
 #include "hci.h"
+#include "hci_dump.h"
 #include "bluetooth_company_id.h"
 #ifdef BCM_BT_CHIP
 #include "btstack_chipset_bcm.h"
+#include "btstack_chipset_bcm_download_firmware.h"
 #else
 #include "btstack_chipset_cc256x.h"
 #endif
@@ -94,7 +96,7 @@ extern uint32_t rcc_ahb_frequency;
 
 
 // btstack code starts there
-void btstack_main(void);
+extern void btstack_main(void);
 
 static void bluetooth_power_cycle(void);
 
@@ -104,6 +106,7 @@ static void bluetooth_power_cycle(void);
 static void dummy_handler(void);
 static void (*tick_handler)(void) = &dummy_handler;
 static int hal_uart_needed_during_sleep = 1;
+static btstack_uart_config_t uart_config;
 
 static void dummy_handler(void){};
 
@@ -133,7 +136,7 @@ void sys_tick_handler(void){
 	static int n;
 	n++;
 	if (n % 10 == 0) {
-		printf("tick n %d\n", n++);
+		//printf("tick n %d\n", n++);
 	}
 }
 
@@ -202,25 +205,28 @@ void hal_uart_dma_set_sleep(uint8_t sleep){
 	hal_uart_needed_during_sleep = !sleep;
 }
 
-// DMA1_CHANNEL6 UART2_TX
-void dma1_channel6_isr(void) {
-	if ((DMA1_ISR & DMA_ISR_TCIF6) != 0) {
-		DMA1_IFCR |= DMA_IFCR_CTCIF6;
-		dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL6);
+// DMA1_CHANNEL7 UART2_TX
+void dma1_channel7_isr(void) {
+	if ((DMA1_ISR & DMA_ISR_TCIF7) != 0) {
+		DMA1_IFCR |= DMA_IFCR_CTCIF7;
+		dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL7);
 		usart_disable_tx_dma(USART2);
-		dma_disable_channel(DMA1, DMA_CHANNEL6);
+		dma_disable_channel(DMA1, DMA_CHANNEL7);
 		(*tx_done_handler)();
 	}
 }
 
-// DMA1_CHANNEL7 UART2_RX
-void dma1_channel7_isr(void){
-	if ((DMA1_ISR & DMA_ISR_TCIF7) != 0) {
-		DMA1_IFCR |= DMA_IFCR_CTCIF7;
-		dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL7);
+// DMA1_CHANNEL6 UART2_RX
+void dma1_channel6_isr(void){
+	if ((DMA1_ISR & DMA_ISR_TCIF6) != 0) {
+		DMA1_IFCR |= DMA_IFCR_CTCIF6;
+		dma_disable_transfer_complete_interrupt(DMA1, DMA_CHANNEL6);
 		usart_disable_rx_dma(USART2);
-		dma_disable_channel(DMA1, DMA_CHANNEL7);
-
+		dma_disable_channel(DMA1, DMA_CHANNEL6);
+		
+		//unsigned char *p = (unsigned char *)*(unsigned long *)0x40020078;
+		//printf("data @ %p\n", p);
+		//printf("rcv %02x, %02x, %02x, %02x, %02x, %02x, %02x\n", *p, *(p+1), *(p+2), *(p+3), *(p+4), *(p+5), *(p+6));
 		// hal_uart_manual_rts_set();
 		(*rx_done_handler)();
 	}
@@ -233,7 +239,11 @@ void exti0_isr(void){
 }
 
 void hal_uart_dma_init(void){
-	bluetooth_power_cycle();
+	static int uart_init = 0;
+	if (!uart_init) {
+		uart_init = 1;
+		bluetooth_power_cycle();
+	}
 }
 void hal_uart_dma_set_block_received( void (*the_block_handler)(void)){
     rx_done_handler = the_block_handler;
@@ -245,9 +255,9 @@ void hal_uart_dma_set_block_sent( void (*the_block_handler)(void)){
 
 void hal_uart_dma_set_csr_irq_handler( void (*the_irq_handler)(void)){
 	if (the_irq_handler){
-		/* Configure the EXTI0 interrupt (USART2_CTS is on PB13) */
+		/* Configure the EXTI0 interrupt (USART2_CTS is on PA0) */
 		nvic_enable_irq(NVIC_EXTI0_IRQ);
-		exti_select_source(EXTI0, GPIOB);
+		exti_select_source(EXTI0, GPIOA);
 		exti_set_trigger(EXTI0, EXTI_TRIGGER_RISING);
 		exti_enable_request(EXTI0);
 	} else {
@@ -257,8 +267,9 @@ void hal_uart_dma_set_csr_irq_handler( void (*the_irq_handler)(void)){
     cts_irq_handler = the_irq_handler;
 }
 
-int  hal_uart_dma_set_baud(uint32_t baud){
+int hal_uart_dma_set_baud(uint32_t baud){
 	usart_disable(USART2);
+	printf("hal_uart_dma_set_baud baud %lu\n", (unsigned long)baud);
 	usart_set_baudrate(USART2, baud);
 	usart_enable(USART2);
 	return 0;
@@ -266,36 +277,10 @@ int  hal_uart_dma_set_baud(uint32_t baud){
 
 void hal_uart_dma_send_block(const uint8_t *data, uint16_t size){
 
-	// printf("hal_uart_dma_send_block size %u\n", size);
+	printf("hal_uart_dma_send_block size %u\n", size);
 	/*
-	 * USART2_TX Using DMA_CHANNEL6
+	 * USART2_TX Using DMA_CHANNEL7
 	 */
-
-	/* Reset DMA channel*/
-	dma_channel_reset(DMA1, DMA_CHANNEL6);
-
-	dma_set_peripheral_address(DMA1, DMA_CHANNEL6, (uint32_t)&USART2_DR);
-	dma_set_memory_address(DMA1, DMA_CHANNEL6, (uint32_t)data);
-	dma_set_number_of_data(DMA1, DMA_CHANNEL6, size);
-	dma_set_read_from_memory(DMA1, DMA_CHANNEL6);
-	dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL6);
-	dma_set_peripheral_size(DMA1, DMA_CHANNEL6, DMA_CCR_PSIZE_8BIT);
-	dma_set_memory_size(DMA1, DMA_CHANNEL6, DMA_CCR_MSIZE_8BIT);
-	dma_set_priority(DMA1, DMA_CHANNEL6, DMA_CCR_PL_VERY_HIGH);
-	dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL6);
-	dma_enable_channel(DMA1, DMA_CHANNEL6);
-    usart_enable_tx_dma(USART2);
-}
-
-void hal_uart_dma_receive_block(uint8_t *data, uint16_t size){
-
-	// hal_uart_manual_rts_clear();
-
-	/*
-	 * USART2_RX is on DMA_CHANNEL7
-	 */
-
-	// printf("hal_uart_dma_receive_block req size %u\n", size);
 
 	/* Reset DMA channel*/
 	dma_channel_reset(DMA1, DMA_CHANNEL7);
@@ -303,13 +288,85 @@ void hal_uart_dma_receive_block(uint8_t *data, uint16_t size){
 	dma_set_peripheral_address(DMA1, DMA_CHANNEL7, (uint32_t)&USART2_DR);
 	dma_set_memory_address(DMA1, DMA_CHANNEL7, (uint32_t)data);
 	dma_set_number_of_data(DMA1, DMA_CHANNEL7, size);
-	dma_set_read_from_peripheral(DMA1, DMA_CHANNEL7);
+	dma_set_read_from_memory(DMA1, DMA_CHANNEL7);
 	dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL7);
 	dma_set_peripheral_size(DMA1, DMA_CHANNEL7, DMA_CCR_PSIZE_8BIT);
 	dma_set_memory_size(DMA1, DMA_CHANNEL7, DMA_CCR_MSIZE_8BIT);
-	dma_set_priority(DMA1, DMA_CHANNEL7, DMA_CCR_PL_HIGH);
+	dma_set_priority(DMA1, DMA_CHANNEL7, DMA_CCR_PL_VERY_HIGH);
 	dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL7);
 	dma_enable_channel(DMA1, DMA_CHANNEL7);
+    usart_enable_tx_dma(USART2);
+
+#if 0
+#define UASRT2BASE 0x40004400
+	printf("usart2 str 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x00));
+	printf("usart2 dr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x04));
+	printf("usart2 brr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x08));
+	printf("usart2 ctlr1 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x0C));
+	printf("usart2 ctlr2 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x10));
+	printf("usart2 ctlr3 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x14));
+	printf("usart2 gtpr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x1C));
+
+	msleep(500);
+
+	printf("hal_uart_dma_send_block DMA_IFR 0x%lx\n",
+			*(volatile unsigned long *)(0x40020000 + 0));
+	printf("hal_uart_dma_send_block DMA_CTLR7 0x%lx\n",
+			*(volatile unsigned long *)(0x40020000 + 0x80));
+	printf("hal_uart_dma_send_block DMA_RCNT7 0x%lx\n",
+			*(volatile unsigned long *)(0x40020000 + 0x84));
+	printf("hal_uart_dma_send_block DMA_PBAR7 0x%lx\n",
+			*(volatile unsigned long *)(0x40020000 + 0x88));
+	printf("hal_uart_dma_send_block DMA_MBAR7 0x%lx\n",
+			*(volatile unsigned long *)(0x40020000 + 0x8C));
+
+	printf("usart2 str 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x00));
+	printf("usart2 dr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x04));
+	printf("usart2 brr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x08));
+	printf("usart2 ctlr1 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x0C));
+	printf("usart2 ctlr2 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x10));
+	printf("usart2 ctlr3 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x14));
+	printf("usart2 gtpr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x1C));
+#endif
+}
+
+void hal_uart_dma_receive_block(uint8_t *data, uint16_t size){
+
+	//hal_uart_manual_rts_clear();
+
+	/*
+	 * USART2_RX is on DMA_CHANNEL6
+	 */
+
+	printf("hal_uart_dma_receive_block req size %u\n", size);
+
+	/* Reset DMA channel*/
+	dma_channel_reset(DMA1, DMA_CHANNEL6);
+
+	dma_set_peripheral_address(DMA1, DMA_CHANNEL6, (uint32_t)&USART2_DR);
+	dma_set_memory_address(DMA1, DMA_CHANNEL6, (uint32_t)data);
+	dma_set_number_of_data(DMA1, DMA_CHANNEL6, size);
+	dma_set_read_from_peripheral(DMA1, DMA_CHANNEL6);
+	dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL6);
+	dma_set_peripheral_size(DMA1, DMA_CHANNEL6, DMA_CCR_PSIZE_8BIT);
+	dma_set_memory_size(DMA1, DMA_CHANNEL6, DMA_CCR_MSIZE_8BIT);
+	dma_set_priority(DMA1, DMA_CHANNEL6, DMA_CCR_PL_HIGH);
+	dma_enable_transfer_complete_interrupt(DMA1, DMA_CHANNEL6);
+	dma_enable_channel(DMA1, DMA_CHANNEL6);
     usart_enable_rx_dma(USART2);
 }
 
@@ -407,17 +464,36 @@ static void bluetooth_setup(void){
 	usart_set_mode(USART2, USART_MODE_TX_RX);
 	usart_set_parity(USART2, USART_PARITY_NONE);
 	usart_set_flow_control(USART2, USART_FLOWCONTROL_RTS);
+	//usart_set_flow_control(USART2, USART_FLOWCONTROL_NONE);
 
 	/* Finally enable the USART. */
 	usart_enable(USART2);
 
 	// TX
+	nvic_set_priority(NVIC_DMA1_CHANNEL7_IRQ, 0);
+	nvic_enable_irq(NVIC_DMA1_CHANNEL7_IRQ);
+
+	// RX
 	nvic_set_priority(NVIC_DMA1_CHANNEL6_IRQ, 0);
 	nvic_enable_irq(NVIC_DMA1_CHANNEL6_IRQ);
 
-	// RX
-	nvic_set_priority(NVIC_DMA1_CHANNEL7_IRQ, 0);
-	nvic_enable_irq(NVIC_DMA1_CHANNEL7_IRQ);
+#if 0
+#define UASRT2BASE 0x40004400
+	printf("usart2 str 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x00));
+	printf("usart2 dr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x04));
+	printf("usart2 brr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x08));
+	printf("usart2 ctlr1 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x0C));
+	printf("usart2 ctlr2 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x10));
+	printf("usart2 ctlr3 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x14));
+	printf("usart2 gtpr 0x%lx\n",
+			*(volatile unsigned long *)(UASRT2BASE + 0x1C));
+#endif
 }
 
 static void bluetooth_clk_init(void)
@@ -426,25 +502,25 @@ static void bluetooth_clk_init(void)
 
 	timer_set_mode(TIM3, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
 
-	timer_set_prescaler(TIM2, 54);
+	timer_set_prescaler(TIM3, 54);
 
-	timer_disable_preload(TIM2);
+	timer_disable_preload(TIM3);
 
-	timer_continuous_mode(TIM2);
+	timer_continuous_mode(TIM3);
 
-	timer_set_period(TIM2, 39);
+	timer_set_period(TIM3, 39);
 
-	timer_set_oc_value(TIM2, TIM_OC1, 19);
+	timer_set_oc_value(TIM3, TIM_OC1, 19);
 
-	timer_set_oc_mode(TIM2, TIM_OC1, TIM_OCM_PWM1);
+	timer_set_oc_mode(TIM3, TIM_OC1, TIM_OCM_PWM1);
 
-	timer_set_oc_polarity_high(TIM2, TIM_OC1);
+	timer_set_oc_polarity_high(TIM3, TIM_OC1);
 
-	timer_set_oc_idle_state_set(TIM2, TIM_OC1);
+	timer_set_oc_idle_state_set(TIM3, TIM_OC1);
 	
-	timer_enable_oc_output(TIM2, TIM_OC1);
+	timer_enable_oc_output(TIM3, TIM_OC1);
 
-	timer_enable_counter(TIM2);
+	timer_enable_counter(TIM3);
 }
 
 // reset Bluetooth using n_shutdown
@@ -453,16 +529,15 @@ static void bluetooth_power_cycle(void){
 
 	bluetooth_clk_init();
 
-	msleep(500);
-	printf("Bluetooth power cycle 1\n");
+	msleep(1000);
 	gpio_clear(BT_N_RST_PORT, BT_N_RST_IO);
 	gpio_clear(BT_N_WAKE_PORT, BT_N_WAKE_IO);
-	msleep(1000);
+	msleep(2000);
 	gpio_set(BT_N_RST_PORT, BT_N_RST_IO);
-	msleep(500);
+	msleep(1000);
 
 	printf("Bluetooth power cycle end\n");
-	hal_led_on();
+	__enable_irq();
 }
 
 
@@ -492,7 +567,7 @@ static void local_version_information_handler(uint8_t * packet){
     switch (manufacturer){
         case BLUETOOTH_COMPANY_ID_BROADCOM_CORPORATION:   
             printf("Broadcom - using BCM driver.\n");
-            hci_set_chipset(btstack_chipset_bcm_instance());
+            //hci_set_chipset(btstack_chipset_bcm_instance());
             break;
         default:
             printf("Unknown manufacturer / manufacturer not supported yet (%d).\n", manufacturer);
@@ -544,6 +619,32 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
     }
 }
 
+static void phase2(int status){
+
+    if (status){
+        printf("Download firmware failed\n");
+        return;
+    }
+
+    printf("Phase 2: Main app\n");
+
+    // init HCI
+    hci_init(hci_transport_h4_instance(btstack_uart_block_embedded_instance()), (void*) &config);
+    hci_set_link_key_db(btstack_link_key_db_memory_instance());
+#ifdef BCM_BT_CHIP
+    hci_set_chipset(btstack_chipset_bcm_instance());
+#else
+    hci_set_chipset(btstack_chipset_cc256x_instance());
+#endif
+
+    // inform about BTstack state
+    hci_event_callback_registration.callback = &packet_handler;
+    hci_add_event_handler(&hci_event_callback_registration);
+
+    // setup app
+    btstack_main();
+}
+
 int main(void)
 {
 	clock_setup();
@@ -558,25 +659,30 @@ int main(void)
 
 	bluetooth_setup();
 
+	hal_led_on();
+
+	hci_dump_open(NULL, HCI_DUMP_STDOUT);
+
 	// start with BTstack init - especially configure HCI Transport
     btstack_memory_init();
     btstack_run_loop_init(btstack_run_loop_embedded_get_instance());
-    
-    // init HCI
-    hci_init(hci_transport_h4_instance(btstack_uart_block_embedded_instance()), (void*) &config);
-    hci_set_link_key_db(btstack_link_key_db_memory_instance());
-#ifdef BCM_BT_CHIP
-    hci_set_chipset(btstack_chipset_bcm_instance());
-#else
-    hci_set_chipset(btstack_chipset_cc256x_instance());
-#endif
 
-    // inform about BTstack state
-    hci_event_callback_registration.callback = &packet_handler;
-    hci_add_event_handler(&hci_event_callback_registration);
+	// setup UART HAL + Run Loop integration
+	const btstack_uart_block_t *uart_driver = btstack_uart_block_embedded_instance();
 
-	// hand over to btstack embedded code 
-    btstack_main();
+    // extract UART config from transport config, but disable flow control and use default baudrate
+    uart_config.baudrate    = config.baudrate_main;
+    uart_config.flowcontrol = 1;
+    uart_config.device_name = config.device_name;
+    uart_driver->init(&uart_config);
+
+    // phase #1 download firmware
+    printf("Phase 1: Download firmware\n");
+
+	const btstack_chipset_t *chipset = btstack_chipset_bcm_instance();
+
+	chipset->init(NULL);
+    btstack_chipset_bcm_download_firmware(uart_driver, config.baudrate_main, &phase2);
 
     // go
     btstack_run_loop_execute();
